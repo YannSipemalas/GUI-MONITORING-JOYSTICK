@@ -1,0 +1,3 @@
+# Dependensi Python untuk Robot System Monitoring
+PyQt5>=5.15.0
+pyserial>=3.5

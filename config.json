@@ -1,0 +1,26 @@
+{
+  "network": {
+    "udp_listen_ip": "0.0.0.0",
+    "udp_listen_port": 5005,
+    "buffer_size": 4096,
+    "watchdog_timeout_sec": 1.0
+  },
+  "serial": {
+    "port": "/dev/ttyACM0",
+    "baudrate": 115200,
+    "send_hz": 50,
+    "reconnect_interval_sec": 1.0
+  },
+  "joystick": {
+    "deadzone_threshold": 0.05,
+    "invert_y_axis": false
+  },
+  "thresholds": {
+    "packet_loss_warn_percent": 5.0,
+    "latency_warn_ms": 150.0
+  },
+  "logging": {
+    "auto_save_log": true,
+    "log_directory": "./logs"
+  }
+}
