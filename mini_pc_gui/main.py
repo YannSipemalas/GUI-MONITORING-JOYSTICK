@@ -158,6 +158,10 @@ class RobotMonitoringApp(QMainWindow):
             b.setStyle(b.style())
 
     def on_serial_status_changed(self, is_connected, port):
+        # Hanya update UI jika status benar-benar berubah
+        if self._conn_state.get("serial") == is_connected:
+            return
+        self._conn_state["serial"] = is_connected
         self.panel_teensy.update_serial_status(is_connected)
         b = self.panel_telemetry.node_serial.badge_label
         b.setText("● CONNECTED" if is_connected else "● DISCONNECTED")

@@ -283,8 +283,8 @@ class TelemetryPanel(QFrame):
         st.setStyleSheet("font-size: 10px; color: #64748B;")
         st.setAlignment(align_center())
 
-        badge = QLabel("● DISCONNECTED")
-        badge.setObjectName("NodeBadgeDisconn")
+        badge = QLabel("○  Menunggu...")
+        badge.setObjectName("NodeBadgeWaiting")
         badge.setAlignment(align_center())
 
         l.addWidget(ic)
@@ -337,8 +337,8 @@ class TeensyLogPanel(QFrame):
         head_row = QHBoxLayout()
         title = QLabel("🖧  TENSY Serial")
         title.setObjectName("CardHeader")
-        self.badge_status = QLabel("● DISCONNECTED")
-        self.badge_status.setObjectName("BadgeStatusDisconn")
+        self.badge_status = QLabel("○  Menunggu...")
+        self.badge_status.setObjectName("BadgeStatusWaiting")
 
         head_row.addWidget(title)
         head_row.addStretch()
@@ -347,8 +347,8 @@ class TeensyLogPanel(QFrame):
 
         info_grid = QGridLayout()
         info_grid.setVerticalSpacing(3)
-        self.lbl_st = QLabel("DISCONNECTED")
-        self.lbl_st.setStyleSheet("color: #EF4444; font-weight: bold;")
+        self.lbl_st = QLabel("Menunggu...")
+        self.lbl_st.setStyleSheet("color: #94A3B8; font-weight: bold;")
         self.lbl_port = QLabel(serial_cfg.get("port", "/dev/ttyACM0"))
         self.lbl_baud = QLabel(str(serial_cfg.get("baudrate", 115200)))
         self.lbl_hz = QLabel(f"{serial_cfg.get('send_hz', 50)} Hz")

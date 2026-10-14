@@ -92,6 +92,11 @@ LIGHT_THEME_QSS = """
         font-size: 10px;
         font-weight: bold;
     }
+    #NodeBadgeWaiting {
+        color: #94A3B8;
+        font-size: 10px;
+        font-weight: normal;
+    }
     #BadgeStatusConn {
         background-color: #DCFCE7;
         color: #16A34A;
@@ -108,6 +113,15 @@ LIGHT_THEME_QSS = """
         border-radius: 8px;
         font-size: 10px;
         font-weight: bold;
+        padding: 3px 10px;
+    }
+    #BadgeStatusWaiting {
+        background-color: #F1F5F9;
+        color: #94A3B8;
+        border: 1px solid #CBD5E1;
+        border-radius: 8px;
+        font-size: 10px;
+        font-weight: normal;
         padding: 3px 10px;
     }
     #BtnEstop {
