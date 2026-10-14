@@ -81,16 +81,6 @@ PC_PORT = 5005
 SEND_HZ = 50
 ```
 
-##  Masalah yang Telah Diperbaiki
-
-| Masalah | Solusi |
-|---------|--------|
-| Status CONNECTED↔DISCONNECTED saat tahan stik | Heartbeat 50Hz – selalu kirim paket walaupun stik diam |
-| Motor berhenti saat analog ditahan | Watchdog hanya cek timeout link, tidak nolkan input |
-| Tombol analog tidak terbaca | Axis mapping + JoystickPad XY visualizer |
-| LT/RT konversi salah | Rumus `(raw + 1.0) / 2.0` → range 0…1 |
-| E-Stop tidak mengunci | Serial worker paksa kirim nol selama E-Stop aktif |
-
 ##  Dependensi
 
 | Komponen | Library |
