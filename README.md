@@ -1,8 +1,8 @@
-# 🤖 Robot AKI – Joystick Monitoring System
+#  Robot AKI – Joystick Monitoring System
 
 Sistem monitoring robot berbasis joystick dengan komunikasi UDP antara **Raspberry Pi** dan **Mini PC**, serta kontrol motor via **Teensy** melalui serial.
 
-## 📐 Arsitektur Sistem
+##  Arsitektur Sistem
 
 ```
 [Joystick / Gamepad]
@@ -14,7 +14,7 @@ Sistem monitoring robot berbasis joystick dengan komunikasi UDP antara **Raspber
 └─────────────────────┘                        └──────────────────────────┘                  └─────────┘
 ```
 
-## 📁 Struktur Folder
+##  Struktur Folder
 
 ```
 GUI-MONITORING-JOYSTICK/
@@ -37,7 +37,7 @@ GUI-MONITORING-JOYSTICK/
 └── README.md              ← Dokumen ini
 ```
 
-## 🚀 Cara Menjalankan
+##  Cara Menjalankan
 
 ### 1. Raspberry Pi (pengirim)
 
@@ -63,7 +63,7 @@ cd mini_pc_gui/
 python3 test_sender_sim.py   # Kirim data simulasi ke GUI
 ```
 
-## ⚙️ Konfigurasi
+##  Konfigurasi
 
 Edit `mini_pc_gui/config.json`:
 ```json
@@ -81,7 +81,7 @@ PC_PORT = 5005
 SEND_HZ = 50
 ```
 
-## 🔧 Masalah yang Telah Diperbaiki
+##  Masalah yang Telah Diperbaiki
 
 | Masalah | Solusi |
 |---------|--------|
@@ -91,13 +91,13 @@ SEND_HZ = 50
 | LT/RT konversi salah | Rumus `(raw + 1.0) / 2.0` → range 0…1 |
 | E-Stop tidak mengunci | Serial worker paksa kirim nol selama E-Stop aktif |
 
-## 📋 Dependensi
+##  Dependensi
 
 | Komponen | Library |
 |----------|---------|
 | Raspberry Pi | `pygame` ≥ 2.0 |
 | Mini PC GUI | `PyQt5`, `pyserial` |
 
-## 👤 Author
+##  Author
 
 YannSipemalas
