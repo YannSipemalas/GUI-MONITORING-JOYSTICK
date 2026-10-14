@@ -1,140 +1,125 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MODUL: serial_transceiver.py
-Fungsi: Worker thread pengirim perintah ke Teensy (50 Hz) & penerima umpan balik (RX).
+serial_transceiver.py – Worker thread serial ke Teensy @ 115200 / 50Hz.
+Jika E-Stop aktif, selalu kirim nol (mesin tidak bergerak).
 """
 
-import time
 import json
+import time
+import serial
+import serial.tools.list_ports
+from PyQt5.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 
-try:
-    from PyQt5.QtCore import QThread, pyqtSignal
-except ImportError:
-    from PyQt6.QtCore import QThread, pyqtSignal
-
-try:
-    import serial
-    SERIAL_AVAILABLE = True
-except ImportError:
-    SERIAL_AVAILABLE = False
-
-from config_manager import DPAD_X_AXIS, DPAD_Y_AXIS
+SERIAL_BAUD = 115200
+SEND_HZ     = 50          # Hz kirim ke Teensy
+CMD_TIMEOUT = 2.0         # detik sebelum auto-stop jika tidak ada cmd baru
 
 
 class SerialTransceiverWorker(QThread):
-    serial_status_changed = pyqtSignal(bool, str) # (is_connected, port_name)
-    serial_tx_event = pyqtSignal(str)             # Pesan terkirim
-    serial_rx_event = pyqtSignal(str)             # Pesan diterima
-    log_event = pyqtSignal(str, str)              # (level, message)
+    """
+    Mengirim perintah motor ke Teensy @50Hz via serial,
+    dan membaca telemetri balik dari Teensy.
+    """
 
-    def __init__(self, cfg, udp_worker):
-        super().__init__()
-        self.cfg = cfg
-        self.udp_worker = udp_worker
-        self.running = True
-        self.is_connected = False
-        self.ser = None
+    telemetry_received = pyqtSignal(dict)    # telemetri dari Teensy
+    serial_status      = pyqtSignal(str)     # 'OPEN' / 'CLOSED' / 'ERROR'
 
-    def build_teensy_packet(self):
-        """Menyusun struktur paket JSON yang dikirimkan ke Teensy (Sesuai joy.py)."""
-        with self.udp_worker.lock:
-            btns = dict(self.udp_worker.buttons)
-            axes = dict(self.udp_worker.analog_axes)
-            lt = self.udp_worker.lt_val
-            rt = self.udp_worker.rt_val
+    def __init__(self, port: str = "/dev/ttyACM0", parent=None):
+        super().__init__(parent)
+        self.port     = port
+        self._running = False
+        self._mutex   = QMutex()
+        self._estop   = False
+        self._cmd     : dict = {}
+        self._last_cmd_time : float = 0.0
 
-        dx = axes.get(DPAD_X_AXIS, 0.0)
-        dy = axes.get(DPAD_Y_AXIS, 0.0)
+    # ------------------------------------------------------------------
+    # API dari luar (thread-safe)
+    # ------------------------------------------------------------------
+    def set_command(self, cmd: dict):
+        """Perbarui perintah motor dari GUI / UDP."""
+        with QMutexLocker(self._mutex):
+            self._cmd           = dict(cmd)
+            self._last_cmd_time = time.time()
 
-        pkt = {
-            "Analog 1 X": round(axes.get(1, 0.0), 3),
-            "Analog 1 Y": round(axes.get(0, 0.0), 3),
-            "Analog 2 X": round(axes.get(4, 0.0), 3),
-            "Analog 2 Y": round(axes.get(3, 0.0), 3),
-            "buttons": {
-                "Y": btns.get("Y", 0),
-                "B": btns.get("B", 0),
-                "A": btns.get("A", 0),
-                "X": btns.get("X", 0),
-                "LB": btns.get("LB", 0),
-                "RB": btns.get("RB", 0),
-                "LT": int(lt > 0.5),
-                "RT": int(rt > 0.5),
-                "select": btns.get("select", 0),
-                "start": btns.get("start", 0),
-                "home": btns.get("home", 0),
-                "up": int(dy < -0.5),
-                "down": int(dy > 0.5),
-                "left": int(dx < -0.5),
-                "right": int(dx > 0.5)
-            }
-        }
-        return pkt
+    def set_estop(self, active: bool):
+        """Aktifkan / matikan E-Stop (semua nol saat aktif)."""
+        with QMutexLocker(self._mutex):
+            self._estop = active
 
+    def is_estop(self) -> bool:
+        with QMutexLocker(self._mutex):
+            return self._estop
+
+    # ------------------------------------------------------------------
+    # Thread utama
+    # ------------------------------------------------------------------
     def run(self):
-        port = self.cfg["serial"].get("port", "/dev/ttyACM0")
-        baud = self.cfg["serial"].get("baudrate", 115200)
-        send_hz = self.cfg["serial"].get("send_hz", 50)
-        period = 1.0 / send_hz if send_hz > 0 else 0.02
-        reconn_interval = self.cfg["serial"].get("reconnect_interval_sec", 1.0)
+        self._running = True
+        period        = 1.0 / SEND_HZ
+        next_time     = time.monotonic()
 
-        next_time = time.monotonic()
-
-        while self.running:
-            # 1. Buka Port Serial jika belum tersambung
-            if self.ser is None:
-                if SERIAL_AVAILABLE:
-                    try:
-                        self.ser = serial.Serial(port, baud, timeout=0)
-                        self.is_connected = True
-                        self.serial_status_changed.emit(True, port)
-                        self.log_event.emit("INFO", f"Berhasil tersambung ke Teensy di {port} ({baud} Baud)")
-                    except Exception:
-                        self.ser = None
-                        self.is_connected = False
-                        self.serial_status_changed.emit(False, port)
-                        time.sleep(reconn_interval)
-                        continue
-                else:
-                    self.is_connected = False
-                    self.serial_status_changed.emit(False, port)
-                    time.sleep(reconn_interval)
+        ser = None
+        while self._running:
+            # ---------- Buka serial jika belum terbuka ----------
+            if ser is None or not ser.is_open:
+                try:
+                    ser = serial.Serial(self.port, SERIAL_BAUD, timeout=0.05)
+                    self.serial_status.emit("OPEN")
+                    print(f"[SERIAL] Terhubung ke {self.port} @ {SERIAL_BAUD}")
+                except serial.SerialException as e:
+                    self.serial_status.emit("CLOSED")
+                    print(f"[SERIAL] Gagal buka port: {e}")
+                    time.sleep(2.0)
                     continue
 
-            # 2. Pengiriman Data Rutin (50 Hz)
+            # ---------- Siapkan perintah ----------
+            with QMutexLocker(self._mutex):
+                estop   = self._estop
+                cmd     = dict(self._cmd)
+                cmd_age = time.time() - self._last_cmd_time if self._last_cmd_time > 0 else 9999
+
+            # Jika E-Stop atau sudah terlalu lama tidak ada perintah baru → kirim nol
+            if estop or cmd_age > CMD_TIMEOUT:
+                cmd = {
+                    "LT": 0.0, "RT": 0.0,
+                    "axis_1_x": 0.0, "axis_1_y": 0.0,
+                    "axis_2_x": 0.0, "axis_2_y": 0.0
+                }
+
+            # ---------- Kirim ke Teensy ----------
             try:
-                packet = self.build_teensy_packet()
-                line = json.dumps(packet, separators=(",", ":")) + "\n"
-                self.ser.write(line.encode("utf-8"))
-                self.serial_tx_event.emit(f"[TX] {line.strip()[:65]}...")
+                line = json.dumps(cmd, separators=(",", ":")) + "\n"
+                ser.write(line.encode("utf-8"))
+            except serial.SerialException as e:
+                print(f"[SERIAL] Error kirim: {e}")
+                ser = None
+                self.serial_status.emit("ERROR")
 
-                # 3. Baca Respons Balik dari Teensy (RX)
-                if self.ser.in_waiting > 0:
-                    rx_raw = self.ser.readline().decode("utf-8", errors="ignore").strip()
-                    if rx_raw:
-                        self.serial_rx_event.emit(f"[RX] {rx_raw}")
-            except Exception as e:
-                self.log_event.emit("WARN", f"Koneksi Serial Teensy terputus: {e}")
-                self.is_connected = False
-                self.serial_status_changed.emit(False, port)
-                if self.ser:
-                    try: self.ser.close()
-                    except Exception: pass
-                self.ser = None
-                time.sleep(reconn_interval)
-                continue
+            # ---------- Baca balasan dari Teensy (non-blocking) ----------
+            try:
+                if ser and ser.in_waiting:
+                    raw = ser.readline().decode("utf-8", errors="replace").strip()
+                    if raw:
+                        tele = json.loads(raw)
+                        self.telemetry_received.emit(tele)
+            except Exception:
+                pass
 
-            # 4. Timer Delay Stabil 50 Hz
+            # ---------- Jaga timing 50Hz ----------
             next_time += period
-            sleep_time = next_time - time.monotonic()
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            sleep_t    = next_time - time.monotonic()
+            if sleep_t > 0:
+                time.sleep(sleep_t)
             else:
                 next_time = time.monotonic()
 
-        if self.ser:
-            try: self.ser.close()
-            except Exception: pass
+        if ser and ser.is_open:
+            ser.close()
+        self.serial_status.emit("CLOSED")
+        print("[SERIAL] Thread berhenti.")
 
     def stop(self):
-        self.running = False
+        self._running = False
+        self.wait(3000)

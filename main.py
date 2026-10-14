@@ -1,235 +1,254 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ROBOT SYSTEM MONITORING - MINI PC
-File Utama (Entry Point) untuk Menjalankan Aplikasi GUI Monitoring.
+main.py – Jendela utama GUI Monitoring Joystick.
+Menghubungkan UdpReceiverWorker, SerialTransceiverWorker,
+dan panel-panel GUI.
+
+Logika Watchdog yang DIPERBAIKI:
+  • Watchdog hanya memonitor status link (UdpReceiverWorker menentukan CONNECTED/DISCONNECTED).
+  • Tidak lagi memanggil reset_to_zero() hanya karena stik diam.
+  • E-Stop memaksa serial kirim nol ke Teensy secara permanen sampai dilepas.
 """
 
 import sys
-import os
 import time
 from datetime import datetime
 
-# Tambahkan direktori saat ini ke sys.path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget,
+    QVBoxLayout, QHBoxLayout, QLabel, QSplitter
+)
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui  import QFont
 
-# Import PyQt5 / PyQt6 Compatibility Shim
-try:
-    from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout
-    from PyQt5.QtCore import QTimer, Qt
-except ImportError:
-    try:
-        from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout
-        from PyQt6.QtCore import QTimer, Qt
-    except ImportError:
-        print("[ERROR] PyQt5 atau PyQt6 tidak ditemukan! Silakan install: pip install PyQt5")
-        sys.exit(1)
-
-# Import Modul-Modul Sistem
-from config_manager import load_config
-from style_sheet import LIGHT_THEME_QSS
-from udp_receiver import UdpReceiverWorker
+from udp_receiver       import UdpReceiverWorker
 from serial_transceiver import SerialTransceiverWorker
-from telemetry_logger import TelemetryLogger
-from gui_panels import HeaderWidget, JoystickInputPanel, TelemetryPanel, TeensyLogPanel, FooterWidget
+from gui_panels         import (
+    ConnectionPanel, JoystickPanel,
+    TelemetryPanel, LogPanel, EStopPanel
+)
+
+# ─────────────────────────────────────────────────────────────
+#  KONFIGURASI
+# ─────────────────────────────────────────────────────────────
+UDP_PORT     = 5005
+SERIAL_PORT  = "/dev/ttyACM0"
+
+APP_TITLE    = "GUI Monitoring Joystick – Robot AKI"
+APP_VERSION  = "v2.1 (heartbeat)"
 
 
-class RobotMonitoringApp(QMainWindow):
+# ─────────────────────────────────────────────────────────────
+#  MAIN WINDOW
+# ─────────────────────────────────────────────────────────────
+class MainWindow(QMainWindow):
+
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ROBOT SYSTEM MONITORING | MINI PC")
-        self.resize(1366, 768)
-        self.setMinimumSize(1100, 680)
+        self.setWindowTitle(f"{APP_TITLE}  {APP_VERSION}")
+        self.setMinimumSize(900, 640)
+        self._last_link_status = ""
 
-        # Muat Konfigurasi
-        self.cfg = load_config()
+        # ── Panel-panel ──
+        self._conn_panel  = ConnectionPanel()
+        self._joy_panel   = JoystickPanel()
+        self._tele_panel  = TelemetryPanel()
+        self._log_panel   = LogPanel()
+        self._estop_panel = EStopPanel()
 
-        # Inisialisasi State & Logger
-        self.last_rx_time = None
-        self.estop_active = False
-        log_dir = self.cfg["logging"].get("log_directory", "./logs")
-        self.logger = TelemetryLogger(log_dir=log_dir)
+        # ── Layout ──
+        self._build_layout()
 
-        # Setup Tampilan & Gaya Visual
-        self.setup_ui()
-        self.setStyleSheet(LIGHT_THEME_QSS)
+        # ── Worker Thread UDP ──
+        self._udp = UdpReceiverWorker(port=UDP_PORT)
+        self._udp.data_received.connect(self._on_udp_data)
+        self._udp.status_changed.connect(self._on_udp_status)
+        self._udp.stats_updated.connect(self._on_stats)
+        self._udp.start()
 
-        # Inisialisasi Worker Threads
-        self.udp_worker = UdpReceiverWorker(self.cfg)
-        self.serial_worker = SerialTransceiverWorker(self.cfg, self.udp_worker)
+        # ── Worker Thread Serial ──
+        self._serial = SerialTransceiverWorker(port=SERIAL_PORT)
+        self._serial.telemetry_received.connect(self._on_telemetry)
+        self._serial.serial_status.connect(self._on_serial_status)
+        self._serial.start()
 
-        # Hubungkan Sinyal-Sinyal Antarmuka
-        self.connect_signals()
+        # ── E-Stop toggle ──
+        self._estop_panel.btn.toggled.connect(self._on_estop_toggle)
 
-        # Jalankan Background Threads
-        self.udp_worker.start()
-        self.serial_worker.start()
+        # ── Timer heartbeat status panel (setiap 500ms) ──
+        self._hb_timer = QTimer(self)
+        self._hb_timer.timeout.connect(self._update_heartbeat_display)
+        self._hb_timer.start(500)
 
-        # Inisialisasi Timer Watchdog (100ms) & Clock (1000ms)
-        self.timer_watchdog = QTimer(self)
-        self.timer_watchdog.timeout.connect(self.watchdog_check)
-        self.timer_watchdog.start(100)
+        self._log("Sistem dimulai.")
+        self._log(f"Mendengarkan UDP port {UDP_PORT}.")
+        self._log(f"Serial: {SERIAL_PORT}")
 
-        self.timer_clock = QTimer(self)
-        self.timer_clock.timeout.connect(self.update_clock)
-        self.timer_clock.start(1000)
+    # ──────────────────────────────────────────────────────────
+    #  Layout
+    # ──────────────────────────────────────────────────────────
+    def _build_layout(self):
+        central = QWidget()
+        root    = QVBoxLayout()
+        root.setContentsMargins(12, 8, 12, 8)
+        root.setSpacing(8)
 
-        self.append_system_log("INFO", "Sistem Monitoring diinisialisasi pada Mini PC.")
-        self.append_system_log("INFO", f"Mendengarkan data UDP di Port {self.cfg['network']['udp_listen_port']}...")
+        # Header
+        header = QHBoxLayout()
+        title  = QLabel(APP_TITLE)
+        title.setFont(QFont("Inter", 15, QFont.Bold))
+        title.setStyleSheet("color:#e0e0e0;")
+        self._clock_lbl = QLabel()
+        self._clock_lbl.setStyleSheet("color:#546e7a; font-size:11px;")
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(self._clock_lbl)
 
-    def setup_ui(self):
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        root_layout = QVBoxLayout(main_widget)
-        root_layout.setContentsMargins(16, 12, 16, 12)
-        root_layout.setSpacing(10)
+        # Jam update setiap detik
+        self._clock_timer = QTimer(self)
+        self._clock_timer.timeout.connect(self._update_clock)
+        self._clock_timer.start(1000)
+        self._update_clock()
 
-        # 1. Header Bar
-        self.header = HeaderWidget(self)
-        self.header.btn_estop.clicked.connect(self.toggle_estop)
-        root_layout.addWidget(self.header)
+        root.addLayout(header)
 
-        # 2. Body - Layout 3 Kolom
-        body_layout = QHBoxLayout()
-        body_layout.setSpacing(12)
+        # E-Stop
+        root.addWidget(self._estop_panel)
 
-        # Kolom 1: Joystick Input Panel
-        self.panel_joystick = JoystickInputPanel(self)
-        body_layout.addWidget(self.panel_joystick)
+        # Baris atas: koneksi + joystick
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+        top_row.addWidget(self._conn_panel, 1)
+        top_row.addWidget(self._joy_panel,  2)
+        root.addLayout(top_row)
 
-        # Kolom 2: Telemetry & Statistics Panel
-        self.panel_telemetry = TelemetryPanel(self)
-        body_layout.addWidget(self.panel_telemetry, stretch=3)
+        # Baris bawah: telemetri + log
+        bot_row = QHBoxLayout()
+        bot_row.setSpacing(8)
+        bot_row.addWidget(self._tele_panel, 1)
+        bot_row.addWidget(self._log_panel,  2)
+        root.addLayout(bot_row)
 
-        # Kolom 3: Teensy Serial & Log Panel
-        self.panel_teensy = TeensyLogPanel(self.cfg["serial"], self)
-        self.panel_teensy.btn_clear.clicked.connect(self.clear_system_log)
-        self.panel_teensy.btn_rec.clicked.connect(self.toggle_recording)
-        body_layout.addWidget(self.panel_teensy, stretch=3)
+        central.setLayout(root)
+        self.setCentralWidget(central)
 
-        root_layout.addLayout(body_layout, stretch=1)
+        # Stylesheet global (dark theme)
+        self.setStyleSheet("""
+            QMainWindow, QWidget {
+                background: #0d1117;
+                color: #e0e0e0;
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+            }
+        """)
 
-        # 3. Footer Bar
-        self.footer = FooterWidget(self)
-        root_layout.addLayout(self.footer)
+    # ──────────────────────────────────────────────────────────
+    #  Slot: Data UDP diterima
+    # ──────────────────────────────────────────────────────────
+    def _on_udp_data(self, data: dict):
+        # Update panel joystick
+        self._joy_panel.update_data(data)
 
-    def connect_signals(self):
-        # Sinyal dari UDP Receiver
-        self.udp_worker.telemetry_updated.connect(self.on_telemetry_updated)
-        self.udp_worker.log_event.connect(self.append_system_log)
-        self.udp_worker.connection_changed.connect(self.update_connection_status)
+        # Status Bluetooth dari Raspberry Pi
+        bt_ok = data.get("joystick_connected", False)
+        bt_str = "CONNECTED" if bt_ok else "DISCONNECTED"
+        self._conn_panel.update_status("bluetooth", bt_str)
 
-        # Sinyal dari Serial Transceiver
-        self.serial_worker.serial_status_changed.connect(self.on_serial_status_changed)
-        self.serial_worker.serial_tx_event.connect(self.panel_teensy.append_serial_text)
-        self.serial_worker.serial_rx_event.connect(self.panel_teensy.append_serial_text)
-        self.serial_worker.log_event.connect(self.append_system_log)
+        # Teruskan perintah ke serial (jika tidak E-Stop)
+        if not self._estop_panel.is_active():
+            analog = data.get("analog", {})
+            self._serial.set_command(analog)
 
-    def on_telemetry_updated(self, snap):
-        self.last_rx_time = time.monotonic()
-        # Perbarui Kolom 1 (Tombol & Analog)
-        self.panel_joystick.update_inputs(snap["buttons"], snap["lt"], snap["rt"])
-        # Perbarui Kolom 2 (Statistik)
-        self.panel_telemetry.update_telemetry(snap)
-        # Rekam ke CSV jika aktif
-        if self.logger.is_recording:
-            self.logger.log_snapshot(snap)
+    # ──────────────────────────────────────────────────────────
+    #  Slot: Status UDP Link (CONNECTED / DISCONNECTED)
+    # ──────────────────────────────────────────────────────────
+    def _on_udp_status(self, status: str):
+        if status == self._last_link_status:
+            return
+        self._last_link_status = status
+        self._conn_panel.update_status("udp", status)
 
-    def update_connection_status(self, device, is_connected):
-        if device == "wifi":
-            b = self.panel_telemetry.node_wifi.badge_label
-            b.setText("● CONNECTED" if is_connected else "● DISCONNECTED")
-            b.setObjectName("NodeBadgeConn" if is_connected else "NodeBadgeDisconn")
-            b.setStyle(b.style())
-        elif device == "bluetooth":
-            b = self.panel_telemetry.node_bt.badge_label
-            b.setText("● CONNECTED" if is_connected else "● DISCONNECTED")
-            b.setObjectName("NodeBadgeConn" if is_connected else "NodeBadgeDisconn")
-            b.setStyle(b.style())
-
-    def on_serial_status_changed(self, is_connected, port):
-        self.panel_teensy.update_serial_status(is_connected)
-        b = self.panel_telemetry.node_serial.badge_label
-        b.setText("● CONNECTED" if is_connected else "● DISCONNECTED")
-        b.setObjectName("NodeBadgeConn" if is_connected else "NodeBadgeDisconn")
-        b.setStyle(b.style())
-
-    def append_system_log(self, level, msg):
         ts = datetime.now().strftime("%H:%M:%S")
-        color = "#1E293B"
-        if level == "WARN": color = "#D97706"
-        elif level == "ERROR": color = "#DC2626"
-        elif level == "INFO": color = "#2563EB"
-
-        html_entry = f'<span style="color:#64748B;">[{ts}]</span> <span style="font-weight:bold; color:{color};">[{level}]</span> {msg}'
-        self.panel_teensy.append_log_html(html_entry)
-
-    def clear_system_log(self):
-        self.panel_teensy.txt_log.clear()
-
-    def toggle_recording(self):
-        if not self.logger.is_recording:
-            saved_file = self.logger.start_recording()
-            if saved_file:
-                self.panel_teensy.btn_rec.setText("■ Stop CSV")
-                self.panel_teensy.btn_rec.setStyleSheet("background-color: #FEE2E2; color: #DC2626; border-color: #FCA5A5;")
-                self.append_system_log("INFO", f"Mulai merekam telemetri ke {saved_file}")
+        if status == "DISCONNECTED":
+            self._log(f"[{ts}] ⚠ UDP DISCONNECTED – tidak ada paket dari Raspberry Pi.")
+            # Nolkan joystick display
+            self._joy_panel.update_data({})
         else:
-            saved_file = self.logger.stop_recording()
-            self.panel_teensy.btn_rec.setText("● Rec CSV")
-            self.panel_teensy.btn_rec.setStyleSheet("")
-            self.append_system_log("INFO", f"Perekaman telemetri dihentikan. Disimpan: {saved_file}")
+            self._log(f"[{ts}] ✓ UDP CONNECTED – paket diterima dari Raspberry Pi.")
 
-    def toggle_estop(self):
-        self.estop_active = not self.estop_active
-        if self.estop_active:
-            self.header.btn_estop.setText("⚠️ ESTOP ACTIVE (RESET)")
-            self.header.btn_estop.setStyleSheet("background-color: #991B1B; color: #FEF08A; font-weight: 800;")
-            self.append_system_log("ERROR", "🚨 EMERGENCY STOP DIAKTIFKAN! Seluruh perintah motor dihentikan.")
-            self.udp_worker.reset_to_zero()
+    # ──────────────────────────────────────────────────────────
+    #  Slot: Statistik UDP
+    # ──────────────────────────────────────────────────────────
+    def _on_stats(self, stats: dict):
+        lat  = stats.get("latency_ms", 0)
+        loss = stats.get("packet_loss", 0)
+        self._log(f"[STATS] Latency: {lat:.1f} ms | Loss: {loss:.1f}%")
+
+    # ──────────────────────────────────────────────────────────
+    #  Slot: Telemetri dari Teensy
+    # ──────────────────────────────────────────────────────────
+    def _on_telemetry(self, tele: dict):
+        self._tele_panel.update_telemetry(tele)
+
+    # ──────────────────────────────────────────────────────────
+    #  Slot: Status Serial
+    # ──────────────────────────────────────────────────────────
+    def _on_serial_status(self, status: str):
+        self._conn_panel.update_status("serial", status)
+        ts = datetime.now().strftime("%H:%M:%S")
+        self._log(f"[{ts}] Serial: {status}")
+
+    # ──────────────────────────────────────────────────────────
+    #  Slot: E-Stop
+    # ──────────────────────────────────────────────────────────
+    def _on_estop_toggle(self, active: bool):
+        self._serial.set_estop(active)
+        ts  = datetime.now().strftime("%H:%M:%S")
+        msg = (f"[{ts}] 🛑 E-STOP AKTIF – motor terkunci!"
+               if active
+               else f"[{ts}] ✓ E-STOP direset – sistem normal.")
+        self._log(msg)
+
+    # ──────────────────────────────────────────────────────────
+    #  Heartbeat display: perbarui indikator setiap 500ms
+    # ──────────────────────────────────────────────────────────
+    def _update_heartbeat_display(self):
+        elapsed = self._udp.last_rx_elapsed()
+        if elapsed < 0.5:
+            hb_str = f"OK ({elapsed*1000:.0f} ms)"
+        elif elapsed < 1.5:
+            hb_str = f"SLOW ({elapsed*1000:.0f} ms)"
         else:
-            self.header.btn_estop.setText("🚨 E-STOP (SPACE)")
-            self.header.btn_estop.setStyleSheet("")
-            self.append_system_log("INFO", "Emergency Stop di-reset ke status normal.")
+            hb_str = "TIMEOUT"
+        self._conn_panel.update_status("heartbeat", hb_str)
 
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Space:
-            self.toggle_estop()
-        else:
-            super().keyPressEvent(event)
+    # ──────────────────────────────────────────────────────────
+    #  Jam
+    # ──────────────────────────────────────────────────────────
+    def _update_clock(self):
+        self._clock_lbl.setText(datetime.now().strftime("%Y-%m-%d  %H:%M:%S"))
 
-    def watchdog_check(self):
-        timeout_sec = self.cfg["network"].get("watchdog_timeout_sec", 1.0)
-        now = time.monotonic()
-        if self.last_rx_time is not None:
-            if now - self.last_rx_time > timeout_sec:
-                # Timeout: data tidak diterima dalam batas waktu
-                self.update_connection_status("wifi", False)
-                self.update_connection_status("bluetooth", False)
-                self.udp_worker.reset_to_zero()
-                self.panel_telemetry.lbl_pkt_rate.setText("0.00 packet/s")
+    # ──────────────────────────────────────────────────────────
+    #  Log helper
+    # ──────────────────────────────────────────────────────────
+    def _log(self, msg: str):
+        self._log_panel.append(msg)
 
-    def update_clock(self):
-        self.header.lbl_clock.setText(datetime.now().strftime("🕒 %Y-%m-%d %H:%M:%S"))
-
+    # ──────────────────────────────────────────────────────────
+    #  Cleanup
+    # ──────────────────────────────────────────────────────────
     def closeEvent(self, event):
-        if self.logger.is_recording:
-            self.logger.stop_recording()
-        self.udp_worker.stop()
-        self.serial_worker.stop()
-        self.udp_worker.wait(500)
-        self.serial_worker.wait(500)
+        self._udp.stop()
+        self._serial.stop()
         event.accept()
 
 
-def main():
-    app = QApplication(sys.argv)
-    window = RobotMonitoringApp()
-    window.show()
-    sys.exit(app.exec_() if hasattr(app, 'exec_') else app.exec())
-
-
+# ─────────────────────────────────────────────────────────────
+#  ENTRY POINT
+# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    main()
+    app = QApplication(sys.argv)
+    app.setFont(QFont("Inter", 10))
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_())
