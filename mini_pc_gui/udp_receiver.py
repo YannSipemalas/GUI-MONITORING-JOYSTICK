@@ -53,6 +53,15 @@ class UdpReceiverWorker(QThread):
         self.last_rate_count = 0
         self.current_packet_rate = 0.0
 
+        # State koneksi — mencegah flip-flop status di UI
+        # None = belum pernah emit sama sekali
+        self._wifi_state   = None   # True / False / None
+        self._bt_state     = None   # True / False / None
+        # Debounce Bluetooth: hanya emit DISCONNECTED setelah N paket
+        # berturut-turut dengan joystick_connected=False (~3 detik @ 50Hz)
+        self._bt_false_streak = 0
+        self.BT_DISCONNECT_THRESHOLD = 150  # paket @ 50Hz = 3 detik
+
     def calculate_jitter(self, values):
         if len(values) < 2:
             return 0.0
@@ -195,9 +204,23 @@ class UdpReceiverWorker(QThread):
                         self.analog_axes[6] = float(an.get("dpad_x", 0.0))
                         self.analog_axes[7] = float(an.get("dpad_y", 0.0))
 
-                    # Status koneksi Bluetooth joystick dari Raspberry Pi
+                    # Status koneksi Bluetooth joystick — dengan debounce
+                    # CONNECTED: langsung, begitu joystick_connected=True
+                    # DISCONNECTED: hanya setelah ~3 detik berturut-turut False
                     bt_ok = bool(pkt.get("joystick_connected", True))
-                    self.connection_changed.emit("bluetooth", bt_ok)
+                    if bt_ok:
+                        # Joystick aktif → reset streak, langsung CONNECTED
+                        self._bt_false_streak = 0
+                        if self._bt_state is not True:
+                            self._bt_state = True
+                            self.connection_changed.emit("bluetooth", True)
+                    else:
+                        # Joystick mungkin mati → hitung streak dulu
+                        self._bt_false_streak += 1
+                        if self._bt_false_streak >= self.BT_DISCONNECT_THRESHOLD:
+                            if self._bt_state is not False:
+                                self._bt_state = False
+                                self.connection_changed.emit("bluetooth", False)
 
                 else:
                     self.unknown_packets += 1
@@ -248,11 +271,19 @@ class UdpReceiverWorker(QThread):
                 }
 
             self.telemetry_updated.emit(snap)
-            self.connection_changed.emit("wifi", True)
-            # Catatan: status bluetooth di-emit di dalam blok parsing heartbeat
-            # jika paket bukan heartbeat, asumsikan bluetooth terhubung
+
+            # ── Emit WiFi CONNECTED hanya saat state benar-benar berubah ──
+            # (tidak setiap paket agar UI tidak update 50x per detik)
+            if self._wifi_state is not True:
+                self._wifi_state = True
+                self.connection_changed.emit("wifi", True)
+
+            # ── Bluetooth: emit hanya jika paket bukan heartbeat ──
+            # (untuk heartbeat, sudah di-handle dengan debounce di blok parsing)
             if pkt_type not in ("heartbeat", "") and "buttons" not in pkt:
-                self.connection_changed.emit("bluetooth", True)
+                if self._bt_state is not True:
+                    self._bt_state = True
+                    self.connection_changed.emit("bluetooth", True)
 
         if self.sock:
             self.sock.close()

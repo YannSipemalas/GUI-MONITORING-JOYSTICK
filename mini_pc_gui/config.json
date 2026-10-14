@@ -3,7 +3,7 @@
     "udp_listen_ip": "0.0.0.0",
     "udp_listen_port": 5005,
     "buffer_size": 4096,
-    "watchdog_timeout_sec": 1.0
+    "watchdog_timeout_sec": 10.0
   },
   "serial": {
     "port": "/dev/ttyACM0",

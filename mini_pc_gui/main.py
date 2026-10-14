@@ -49,6 +49,8 @@ class RobotMonitoringApp(QMainWindow):
         # Inisialisasi State & Logger
         self.last_rx_time = None
         self.estop_active = False
+        # State koneksi saat ini — hanya update UI jika benar-benar berubah
+        self._conn_state = {"wifi": None, "bluetooth": None, "serial": None}
         log_dir = self.cfg["logging"].get("log_directory", "./logs")
         self.logger = TelemetryLogger(log_dir=log_dir)
 
@@ -138,6 +140,12 @@ class RobotMonitoringApp(QMainWindow):
             self.logger.log_snapshot(snap)
 
     def update_connection_status(self, device, is_connected):
+        # Hanya update UI jika status benar-benar berubah
+        # (mencegah GUI refresh 50x per detik saat heartbeat masuk)
+        if self._conn_state.get(device) == is_connected:
+            return
+        self._conn_state[device] = is_connected
+
         if device == "wifi":
             b = self.panel_telemetry.node_wifi.badge_label
             b.setText("● CONNECTED" if is_connected else "● DISCONNECTED")
@@ -201,16 +209,16 @@ class RobotMonitoringApp(QMainWindow):
             super().keyPressEvent(event)
 
     def watchdog_check(self):
-        # Minimum 3.0 detik agar toleran terhadap micro-jitter Wi-Fi sesaat.
-        # Nilai di config.json bisa dibesarkan, tapi tidak bisa lebih kecil dari 3.0s.
-        timeout_sec = max(self.cfg["network"].get("watchdog_timeout_sec", 3.0), 3.0)
+        # Timeout 10 detik: koneksi dianggap DISCONNECTED hanya jika benar-benar
+        # tidak ada paket masuk selama 10 detik (joystick dimatikan / baterai habis).
+        # Tidak akan trigger saat jitter Wi-Fi sesaat atau stik diam.
+        timeout_sec = max(self.cfg["network"].get("watchdog_timeout_sec", 10.0), 10.0)
         now = time.monotonic()
         if self.last_rx_time is not None:
             if now - self.last_rx_time > timeout_sec:
-                # Timeout nyata (bukan jitter sesaat): update status koneksi
+                # Timeout nyata: update status koneksi ke DISCONNECTED
                 self.update_connection_status("wifi", False)
                 self.update_connection_status("bluetooth", False)
-                # Nolkan display hanya setelah timeout, bukan saat jitter sesaat
                 self.udp_worker.reset_to_zero()
                 self.panel_telemetry.lbl_pkt_rate.setText("0.00 packet/s")
 
