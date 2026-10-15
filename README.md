@@ -1,4 +1,4 @@
-#  Robot AKI – Joystick Monitoring System
+#  Joystick Monitoring System
 
 Sistem monitoring robot berbasis joystick dengan komunikasi UDP antara **Raspberry Pi** dan **Mini PC**, serta kontrol motor via **Teensy** melalui serial.
 
