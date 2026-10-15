@@ -140,6 +140,11 @@ class RobotMonitoringApp(QMainWindow):
             self.logger.log_snapshot(snap)
 
     def update_connection_status(self, device, is_connected):
+        # STICKY CONNECTED: sekali WiFi/Bluetooth CONNECTED, badge tetap
+        # CONNECTED selama GUI berjalan (tidak kembali ke DISCONNECTED).
+        if device in ("wifi", "bluetooth") and not is_connected \
+                and self._conn_state.get(device) is True:
+            return
         # Hanya update UI jika status benar-benar berubah
         # (mencegah GUI refresh 50x per detik saat heartbeat masuk)
         if self._conn_state.get(device) == is_connected:
@@ -220,11 +225,15 @@ class RobotMonitoringApp(QMainWindow):
         now = time.monotonic()
         if self.last_rx_time is not None:
             if now - self.last_rx_time > timeout_sec:
-                # Timeout nyata: update status koneksi ke DISCONNECTED
-                self.update_connection_status("wifi", False)
-                self.update_connection_status("bluetooth", False)
+                # Tidak ada paket: badge tetap CONNECTED (sticky), tetapi
+                # input joystick tetap di-nol-kan demi keamanan motor.
+                if not getattr(self, "_rx_timeout_logged", False):
+                    self._rx_timeout_logged = True
+                    self.append_system_log("WARN", f"Tidak ada paket > {timeout_sec:.0f} detik — input di-reset ke 0 (status tetap CONNECTED)")
                 self.udp_worker.reset_to_zero()
                 self.panel_telemetry.lbl_pkt_rate.setText("0.00 packet/s")
+            else:
+                self._rx_timeout_logged = False
 
     def update_clock(self):
         self.header.lbl_clock.setText(datetime.now().strftime("🕒 %Y-%m-%d %H:%M:%S"))
