@@ -557,9 +557,14 @@ class TeensyLogPanel(QFrame):
 # 5. FOOTER BAR WIDGET
 # ============================================================
 class FooterWidget(QHBoxLayout):
-    def __init__(self, parent=None):
+    def __init__(self, cfg=None, parent=None):
         super().__init__()
-        self.lbl_status = QLabel("● System Running | Mini PC | Watchdog: 1.0s")
+        net = (cfg or {}).get("network", {})
+        weak = net.get("weak_after_sec", 1.0)
+        wait = net.get("wait_after_sec", 3.0)
+        self.lbl_status = QLabel(
+            f"● System Running | Mini PC | Weak {weak:.0f}s / Wait {wait:.0f}s"
+        )
         self.lbl_status.setStyleSheet("color: #64748B; font-size: 11px;")
         lbl_ver = QLabel("ROBOT SYSTEM MONITORING v1.0")
         lbl_ver.setStyleSheet("color: #94A3B8; font-size: 11px;")
