@@ -132,7 +132,7 @@ class RobotMonitoringApp(QMainWindow):
     def on_telemetry_updated(self, snap):
         self.last_rx_time = time.monotonic()
         # Perbarui Kolom 1 (Tombol & Analog)
-        self.panel_joystick.update_inputs(snap["buttons"], snap["lt"], snap["rt"])
+        self.panel_joystick.update_inputs(snap["buttons"], snap["lt"], snap["rt"], axes=snap.get("axes", {}))
         # Perbarui Kolom 2 (Statistik)
         self.panel_telemetry.update_telemetry(snap)
         # Rekam ke CSV jika aktif

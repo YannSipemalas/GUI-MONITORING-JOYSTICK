@@ -8,14 +8,16 @@ from datetime import datetime
 
 try:
     from PyQt5 import QtCore, QtGui, QtWidgets
-    from PyQt5.QtCore import Qt
+    from PyQt5.QtCore import Qt, QPointF
+    from PyQt5.QtGui  import QPainter, QColor, QPen, QBrush, QFont
     from PyQt5.QtWidgets import (
         QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
         QGridLayout, QFrame, QTextEdit
     )
 except ImportError:
     from PyQt6 import QtCore, QtGui, QtWidgets
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import Qt, QPointF
+    from PyQt6.QtGui  import QPainter, QColor, QPen, QBrush, QFont
     from PyQt6.QtWidgets import (
         QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
         QGridLayout, QFrame, QTextEdit
@@ -67,6 +69,61 @@ class HeaderWidget(QFrame):
         right_box.addSpacing(16)
         right_box.addWidget(self.lbl_clock)
         h_layout.addLayout(right_box)
+
+
+# ============================================================
+# WIDGET PEMBANTU: Visualisasi Analog Stick
+# ============================================================
+class StickVisualizer(QFrame):
+    """Lingkaran interaktif menampilkan posisi X/Y analog stick secara real-time."""
+    def __init__(self, label="Stick", parent=None):
+        super().__init__(parent)
+        self.label = label
+        self._x    = 0.0
+        self._y    = 0.0
+        self.setFixedSize(90, 90)
+
+    def set_value(self, x: float, y: float):
+        self._x = max(-1.0, min(1.0, float(x)))
+        self._y = max(-1.0, min(1.0, float(y)))
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        cx, cy = w // 2, h // 2
+        r = min(w, h) // 2 - 6
+
+        # Lingkaran luar
+        p.setBrush(QBrush(QColor("#F1F5F9")))
+        p.setPen(QPen(QColor("#CBD5E1"), 1.5))
+        p.drawEllipse(QPointF(cx, cy), r, r)
+
+        # Crosshair
+        p.setPen(QPen(QColor("#CBD5E1"), 1))
+        p.drawLine(cx - r, cy, cx + r, cy)
+        p.drawLine(cx, cy - r, cx, cy + r)
+
+        # Titik posisi stick
+        dot_x = cx + self._x * r
+        dot_y = cy + self._y * r
+        dot_r = 9
+        # Shadow
+        p.setBrush(QBrush(QColor(40, 130, 220, 60)))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QPointF(dot_x + 1, dot_y + 1), dot_r, dot_r)
+        # Titik utama
+        p.setBrush(QBrush(QColor("#2563EB")))
+        p.setPen(QPen(QColor("#1D4ED8"), 1))
+        p.drawEllipse(QPointF(dot_x, dot_y), dot_r, dot_r)
+
+        # Label
+        p.setPen(QColor("#64748B"))
+        f = QFont()
+        f.setPointSize(7)
+        p.setFont(f)
+        p.drawText(0, h - 2, w, 14, Qt.AlignHCenter, self.label)
 
 
 # ============================================================
@@ -154,6 +211,44 @@ class JoystickInputPanel(QFrame):
             row.addWidget(badge)
             layout.addLayout(row)
 
+        # ── Analog Stick Visualizer ──────────────────────────
+        sep = QLabel("Analog Stick")
+        sep.setStyleSheet("color: #64748B; font-weight: bold; font-size: 12px; margin-top: 6px;")
+        layout.addWidget(sep)
+
+        # Dua lingkaran stick side-by-side
+        stick_row = QHBoxLayout()
+        stick_row.setSpacing(10)
+
+        left_col  = QVBoxLayout()
+        right_col = QVBoxLayout()
+        left_col.setAlignment(Qt.AlignHCenter)
+        right_col.setAlignment(Qt.AlignHCenter)
+
+        self.viz_l = StickVisualizer("L-Stick")
+        self.viz_r = StickVisualizer("R-Stick")
+
+        # Nilai X/Y teks
+        self.lbl_lx = QLabel("X: +0.000")
+        self.lbl_ly = QLabel("Y: +0.000")
+        self.lbl_rx = QLabel("X: +0.000")
+        self.lbl_ry = QLabel("Y: +0.000")
+        for lbl in [self.lbl_lx, self.lbl_ly, self.lbl_rx, self.lbl_ry]:
+            lbl.setStyleSheet("font-size: 10px; color: #1E293B; font-family: monospace;")
+            lbl.setAlignment(Qt.AlignHCenter)
+
+        left_col.addWidget(self.viz_l, 0, Qt.AlignHCenter)
+        left_col.addWidget(self.lbl_lx)
+        left_col.addWidget(self.lbl_ly)
+
+        right_col.addWidget(self.viz_r, 0, Qt.AlignHCenter)
+        right_col.addWidget(self.lbl_rx)
+        right_col.addWidget(self.lbl_ry)
+
+        stick_row.addLayout(left_col)
+        stick_row.addLayout(right_col)
+        layout.addLayout(stick_row)
+
         layout.addStretch()
 
         # Kotak Informasi
@@ -168,7 +263,11 @@ class JoystickInputPanel(QFrame):
         ib_layout.addWidget(lbl_txt)
         layout.addWidget(info_box)
 
-    def update_inputs(self, buttons_dict, lt_val, rt_val):
+    def update_inputs(self, buttons_dict, lt_val, rt_val, axes=None):
+        """Update seluruh tampilan input joystick.
+        axes: dict dari analog_axes {0: ly, 1: lx, 3: ry, 4: rx, 6: dpx, 7: dpy}
+        """
+        # Update badge tombol
         for btn_name, val in buttons_dict.items():
             if btn_name in self.btn_badges:
                 b = self.btn_badges[btn_name]
@@ -179,8 +278,27 @@ class JoystickInputPanel(QFrame):
                     b.setText("RELEASED")
                     b.setObjectName("BadgeReleased")
                 b.setStyle(b.style())
+
+        # Update nilai LT / RT
         self.val_lt.setText(f"{lt_val:.2f}")
         self.val_rt.setText(f"{rt_val:.2f}")
+
+        # Update visualizer analog stick
+        if axes:
+            # L-Stick: axis 1 = X, axis 0 = Y (sesuai AXIS_MAP di API_AKI.ino)
+            lx = axes.get(1, 0.0)
+            ly = axes.get(0, 0.0)
+            # R-Stick: axis 4 = X, axis 3 = Y
+            rx = axes.get(4, 0.0)
+            ry = axes.get(3, 0.0)
+
+            self.viz_l.set_value(lx, ly)
+            self.viz_r.set_value(rx, ry)
+
+            self.lbl_lx.setText(f"X: {lx:+.3f}")
+            self.lbl_ly.setText(f"Y: {ly:+.3f}")
+            self.lbl_rx.setText(f"X: {rx:+.3f}")
+            self.lbl_ry.setText(f"Y: {ry:+.3f}")
 
 
 # ============================================================
