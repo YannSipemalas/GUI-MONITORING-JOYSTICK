@@ -141,6 +141,19 @@ class JoystickInputPanel(QFrame):
             row.addWidget(badge)
             layout.addLayout(row)
 
+        # Tombol Analog Stick (L3 = tekan stick kiri, R3 = tekan stick kanan)
+        for btn_name, label_text in [("L3", "L3 (↓🕹)"), ("R3", "R3 (↓🕹)")]:
+            row = QHBoxLayout()
+            b_label = QLabel(f"{label_text:<9} :")
+            b_label.setObjectName("ButtonNameLabel")
+            badge = QLabel("RELEASED")
+            badge.setObjectName("BadgeReleased")
+            badge.setAlignment(align_center())
+            self.btn_badges[btn_name] = badge
+            row.addWidget(b_label)
+            row.addWidget(badge)
+            layout.addLayout(row)
+
         layout.addStretch()
 
         # Kotak Informasi

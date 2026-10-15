@@ -63,6 +63,8 @@ BUTTON_MAP = {
     "RT"    : 7,
     "select": 8,
     "start" : 9,
+    "L3"    : 10,   # Tekan analog stick kiri
+    "R3"    : 11,   # Tekan analog stick kanan
     "home"  : 12
 }
 

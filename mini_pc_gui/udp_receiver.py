@@ -43,7 +43,7 @@ class UdpReceiverWorker(QThread):
         self.latencies = []
 
         # Status Joystick Terkini
-        self.buttons = {name: 0 for name in ["A", "B", "X", "Y", "LB", "RB", "select", "start", "home"]}
+        self.buttons = {name: 0 for name in ["A", "B", "X", "Y", "LB", "RB", "select", "start", "home", "L3", "R3"]}
         self.lt_val = 0.0
         self.rt_val = 0.0
         self.analog_axes = {0: 0.0, 1: 0.0, 3: 0.0, 4: 0.0, 6: 0.0, 7: 0.0}
