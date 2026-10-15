@@ -60,7 +60,7 @@ class UdpReceiverWorker(QThread):
         # Debounce Bluetooth: hanya emit DISCONNECTED setelah N paket
         # berturut-turut dengan joystick_connected=False (~3 detik @ 50Hz)
         self._bt_false_streak = 0
-        self.BT_DISCONNECT_THRESHOLD = 150  # paket @ 50Hz = 3 detik
+        self.BT_DISCONNECT_THRESHOLD = 50  # paket @ 50Hz = 1 detik
 
     def calculate_jitter(self, values):
         if len(values) < 2:

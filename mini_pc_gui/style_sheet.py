@@ -97,6 +97,11 @@ LIGHT_THEME_QSS = """
         font-size: 10px;
         font-weight: normal;
     }
+    #NodeBadgeWeak {
+        color: #D97706;
+        font-size: 10px;
+        font-weight: bold;
+    }
     #BadgeStatusConn {
         background-color: #DCFCE7;
         color: #16A34A;

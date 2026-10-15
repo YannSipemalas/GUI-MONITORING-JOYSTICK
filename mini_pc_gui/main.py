@@ -131,6 +131,11 @@ class RobotMonitoringApp(QMainWindow):
 
     def on_telemetry_updated(self, snap):
         self.last_rx_time = time.monotonic()
+        # Paket masuk → WiFi langsung CONNECTED (juga pulih dari LEMAH/DISCONNECTED)
+        self.set_badge("wifi", "conn")
+        # Bluetooth mengikuti flag joystick_connected dari Raspberry Pi
+        bt = getattr(self.udp_worker, "_bt_state", None)
+        self.set_badge("bluetooth", "disc" if bt is False else "conn")
         # Perbarui Kolom 1 (Tombol & Analog)
         self.panel_joystick.update_inputs(snap["buttons"], snap["lt"], snap["rt"], axes=snap.get("axes", {}))
         # Perbarui Kolom 2 (Statistik)
@@ -139,28 +144,37 @@ class RobotMonitoringApp(QMainWindow):
         if self.logger.is_recording:
             self.logger.log_snapshot(snap)
 
-    def update_connection_status(self, device, is_connected):
-        # STICKY CONNECTED: sekali WiFi/Bluetooth CONNECTED, badge tetap
-        # CONNECTED selama GUI berjalan (tidak kembali ke DISCONNECTED).
-        if device in ("wifi", "bluetooth") and not is_connected \
-                and self._conn_state.get(device) is True:
-            return
-        # Hanya update UI jika status benar-benar berubah
-        # (mencegah GUI refresh 50x per detik saat heartbeat masuk)
-        if self._conn_state.get(device) == is_connected:
-            return
-        self._conn_state[device] = is_connected
+    # Status badge realtime: "conn" (hijau), "weak" (kuning), "disc" (merah)
+    _BADGE = {
+        "conn": ("● CONNECTED",    "NodeBadgeConn"),
+        "weak": ("● SINYAL LEMAH", "NodeBadgeWeak"),
+        "disc": ("● DISCONNECTED", "NodeBadgeDisconn"),
+    }
 
-        if device == "wifi":
-            b = self.panel_telemetry.node_wifi.badge_label
-            b.setText("● CONNECTED" if is_connected else "● DISCONNECTED")
-            b.setObjectName("NodeBadgeConn" if is_connected else "NodeBadgeDisconn")
-            b.setStyle(b.style())
-        elif device == "bluetooth":
-            b = self.panel_telemetry.node_bt.badge_label
-            b.setText("● CONNECTED" if is_connected else "● DISCONNECTED")
-            b.setObjectName("NodeBadgeConn" if is_connected else "NodeBadgeDisconn")
-            b.setStyle(b.style())
+    def set_badge(self, device, state):
+        # Hanya update UI jika status benar-benar berubah
+        if self._conn_state.get(device) == state:
+            return
+        prev = self._conn_state.get(device)
+        self._conn_state[device] = state
+        node = {"wifi": self.panel_telemetry.node_wifi,
+                "bluetooth": self.panel_telemetry.node_bt}.get(device)
+        if node is None:
+            return
+        text, obj = self._BADGE[state]
+        b = node.badge_label
+        b.setText(text)
+        b.setObjectName(obj)
+        b.setStyle(b.style())
+        name = "WiFi/UDP" if device == "wifi" else "Bluetooth joystick"
+        if state == "disc" and prev is not None:
+            self.append_system_log("ERROR", f"{name} DISCONNECTED")
+        elif state == "conn" and prev in ("disc", "weak"):
+            self.append_system_log("INFO", f"{name} CONNECTED kembali")
+
+    def update_connection_status(self, device, is_connected):
+        # Sinyal dari UdpReceiverWorker
+        self.set_badge(device, "conn" if is_connected else "disc")
 
     def on_serial_status_changed(self, is_connected, port):
         # Hanya update UI jika status benar-benar berubah
@@ -217,23 +231,24 @@ class RobotMonitoringApp(QMainWindow):
         else:
             super().keyPressEvent(event)
 
+    # Ambang waktu tanpa paket (Raspberry Pi kirim 50Hz = tiap 20ms)
+    WEAK_AFTER_SEC = 1.0   # > 1 detik  → kuning "SINYAL LEMAH"
+    DISC_AFTER_SEC = 3.0   # > 3 detik  → merah "DISCONNECTED" + input di-nol-kan
+
     def watchdog_check(self):
-        # Timeout 10 detik: koneksi dianggap DISCONNECTED hanya jika benar-benar
-        # tidak ada paket masuk selama 10 detik (joystick dimatikan / baterai habis).
-        # Tidak akan trigger saat jitter Wi-Fi sesaat atau stik diam.
-        timeout_sec = max(self.cfg["network"].get("watchdog_timeout_sec", 10.0), 10.0)
-        now = time.monotonic()
-        if self.last_rx_time is not None:
-            if now - self.last_rx_time > timeout_sec:
-                # Tidak ada paket: badge tetap CONNECTED (sticky), tetapi
-                # input joystick tetap di-nol-kan demi keamanan motor.
-                if not getattr(self, "_rx_timeout_logged", False):
-                    self._rx_timeout_logged = True
-                    self.append_system_log("WARN", f"Tidak ada paket > {timeout_sec:.0f} detik — input di-reset ke 0 (status tetap CONNECTED)")
-                self.udp_worker.reset_to_zero()
-                self.panel_telemetry.lbl_pkt_rate.setText("0.00 packet/s")
-            else:
-                self._rx_timeout_logged = False
+        # Dicek tiap 100ms. Status realtime tapi tidak flip-flop:
+        # jitter Wi-Fi sesaat (< 1 detik) tidak mengubah status sama sekali.
+        if self.last_rx_time is None:
+            return
+        gap = time.monotonic() - self.last_rx_time
+        if gap > self.DISC_AFTER_SEC:
+            self.set_badge("wifi", "disc")
+            # Tanpa data dari RPi, status joystick juga tidak diketahui
+            self.set_badge("bluetooth", "disc")
+            self.udp_worker.reset_to_zero()   # failsafe motor
+            self.panel_telemetry.lbl_pkt_rate.setText("0.00 packet/s")
+        elif gap > self.WEAK_AFTER_SEC:
+            self.set_badge("wifi", "weak")
 
     def update_clock(self):
         self.header.lbl_clock.setText(datetime.now().strftime("🕒 %Y-%m-%d %H:%M:%S"))
